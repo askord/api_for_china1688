@@ -2,6 +2,9 @@ from flask import Flask, request, jsonify
 import requests
 import os
 from dotenv import load_dotenv
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
 
@@ -12,6 +15,15 @@ EXTERNAL_API_URL = "https://otapi-1688.p.rapidapi.com/BatchSearchItemsFrame"
 
 # Получаем API-ключ из переменной окружения, с дефолтным значением
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+
+# Конфигурация для email
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "API Notification")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 API_HEADERS = {
     "x-rapidapi-key": RAPIDAPI_KEY,
@@ -64,6 +76,110 @@ def search_items():
             'error': 'Internal server error',
             'message': str(e)
         }), 500
+
+
+@app.route('/api/send-email', methods=['POST'])
+def send_email_notification():
+    try:
+        data = request.get_json()
+        
+        # Проверяем обязательные поля
+        required_fields = ['email', 'fio', 'message']
+        missing_fields = [field for field in required_fields if field not in data or not data[field]]
+        
+        if missing_fields:
+            return jsonify({
+                'error': 'Missing required fields',
+                'missing_fields': missing_fields
+            }), 400
+        
+        sender_email = data['email']  # email отправителя (для связи)
+        fio = data['fio']
+        message_text = data['message']
+        subject = data.get('subject', f'Новое сообщение от {fio}')
+        
+        # Формируем содержимое письма (будет отправлено НАМ)
+        email_content = f"""
+        Новое сообщение с формы обратной связи!
+        
+        От: {fio}
+        Email для связи: {sender_email}
+        
+        Сообщение:
+        {message_text}
+        
+        ---
+        Это автоматическое уведомление от системы.
+        """
+        
+        # Отправляем email НАМ (на EMAIL_USER)
+        send_email(EMAIL_USER, subject, email_content)
+        
+        # Отправляем уведомление в Telegram
+        telegram_sent = False
+        telegram_error = None
+        
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            try:
+                send_telegram_message(f"📧 Новое сообщение с формы:\n\n👤 От: {fio}\n📧 Email: {sender_email}\n\n💬 Сообщение:\n{message_text}")
+                telegram_sent = True
+            except Exception as e:
+                telegram_error = str(e)
+
+        return jsonify({
+            'success': True,
+            'message': 'Email успешно отправлен',
+            'telegram_sent': telegram_sent,
+            'telegram_error': telegram_error,
+            'recipient': EMAIL_USER,  # показываем куда отправили
+            'sender': {
+                'fio': fio,
+                'email': sender_email
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to send email',
+            'message': str(e)
+        }), 500
+
+def send_email(to_email, subject, message):
+    """Отправка email через SMTP"""
+    if not all([EMAIL_USER, EMAIL_PASSWORD]):
+        raise Exception("Email credentials not configured")
+
+    msg = MIMEMultipart()
+    msg['From'] = f'{EMAIL_FROM_NAME} <{EMAIL_USER}>'
+    msg['To'] = to_email
+    msg['Subject'] = subject
+
+    msg.attach(MIMEText(message, 'plain', 'utf-8'))
+
+    try:
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_USER, to_email, msg.as_string())
+    except Exception as e:
+        raise Exception(f"SMTP error: {str(e)}")
+
+def send_telegram_message(message):
+    """Отправка сообщения в Telegram"""
+    if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
+        raise Exception("Telegram credentials not configured")
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': message,
+        'parse_mode': 'HTML'
+    }
+    
+    response = requests.post(url, json=payload)
+    response.raise_for_status()
+    
+    return response.json()
 
 if __name__ == '__main__':
     # Получаем IP-адрес и порт из переменных окружения, с дефолтными значениями
