@@ -17,7 +17,7 @@ CORS(app)
 EXTERNAL_API_URL = "https://otapi-1688.p.rapidapi.com/BatchSearchItemsFrame"
 
 # Получаем API-ключ из переменной окружения, с дефолтным значением
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "78c5ed6b0fmsh2cc04c24a1dae59p1c63ebjsn6d8c7c768794")
 
 # Конфигурация для email
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
@@ -62,9 +62,68 @@ def search_items():
 
         # Проверяем успешность запроса
         response.raise_for_status()
+        data = response.json()
+        
+        #Извлекаем список товаров
+        items = data.get('Result', {}).get('Items', {}).get('Items', {}).get('Content', [])
+        formatted_items = []
 
+        for item in items:
+            physical = item.get("PhysicalParameters",{})
+            dimensions = {
+                "weight": physical.get("Weight"),
+                "length": physical.get("Length"),
+                "width": physical.get("Width"),
+                "height": physical.get("Height")
+            } if physical else None
+
+            quantity_prices= []
+            quantity_ranges = item.get('QuantityRanges', [])
+
+            if isinstance(quantity_ranges, list):
+                for qr in quantity_ranges:
+                    if not isinstance(qr, dict):
+                        continue
+
+                    min_q = qr.get('MinQuantity')
+                    price_data = qr.get('Price', {})
+                    if min_q is not None and isinstance(price_data, dict):
+                        original_price = price_data.get('OriginalPrice')
+                        if original_price is not None:
+                            quantity_prices.append({
+                                "min_quantity": min_q,
+                                "original_price": original_price
+                            })
+
+            min_order_quantity = (
+                min([qp["min_quantity"] for qp in quantity_prices])
+                if quantity_prices else None
+            )
+            price =  None
+            if quantity_prices:
+                min_q_entry = min(quantity_prices, key=lambda x: x["min_quantity"])
+                price = min_q_entry.get("original_price")
+            else:
+                price = item.get('Price', {}).get('OriginalPrice')
+
+            formatted_items.append({
+                "id": item.get("Id"),
+                "title": item.get("Title"),
+                "original_title": item.get("OriginalTitle"),
+                "url": item.get("ExternalItemUrl") or item.get("TaobaoItemUrl"),
+                "price": price,
+                "image": item.get("MainPictureUrl") or (item.get("Pictures",[{}])[0].get("Url") if item.get("Pictures") else None),
+                "min_order_quantity": min_order_quantity,
+                "vendor": item.get("VendorDisplayName"),
+                "location": item.get("Location",{}).get("City"),
+                "dimensions": dimensions,
+                "quantity_prices" : quantity_prices
+            })
         # Возвращаем JSON ответ от RapidAPI
-        return jsonify(response.json())
+        return jsonify({
+            "total": len(formatted_items),
+            "items": formatted_items
+        })
 
     except requests.exceptions.RequestException as e:
         # Обработка ошибок внешнего API (например, проблемы с сетью или неверный ключ)
