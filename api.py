@@ -5,10 +5,13 @@ from dotenv import load_dotenv
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from flask_cors import CORS
+import time
 
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)
 
 # Конфигурация внешнего API
 EXTERNAL_API_URL = "https://otapi-1688.p.rapidapi.com/BatchSearchItemsFrame"
@@ -81,10 +84,11 @@ def search_items():
 @app.route('/api/send-email', methods=['POST'])
 def send_email_notification():
     try:
+        time.sleep(5)
         data = request.get_json()
         
         # Проверяем обязательные поля
-        required_fields = ['email', 'fio', 'message']
+        required_fields = ['email','phone', 'fio', 'message']
         missing_fields = [field for field in required_fields if field not in data or not data[field]]
         
         if missing_fields:
@@ -95,6 +99,7 @@ def send_email_notification():
         
         sender_email = data['email']  # email отправителя (для связи)
         fio = data['fio']
+        phone = data['phone']
         message_text = data['message']
         subject = data.get('subject', f'Новое сообщение от {fio}')
         
@@ -104,7 +109,7 @@ def send_email_notification():
         
         От: {fio}
         Email для связи: {sender_email}
-        
+        Телефон для связи: {phone}
         Сообщение:
         {message_text}
         
@@ -131,10 +136,11 @@ def send_email_notification():
             'message': 'Email успешно отправлен',
             'telegram_sent': telegram_sent,
             'telegram_error': telegram_error,
-            'recipient': EMAIL_USER,  # показываем куда отправили
+        #    'recipient': EMAIL_USER,  # показываем куда отправили
             'sender': {
                 'fio': fio,
-                'email': sender_email
+                'email': sender_email,
+                'phone': phone
             }
         })
         

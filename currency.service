@@ -1,0 +1,16 @@
+[Unit]
+Description=Currency Rate Flask Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bot/myenv/bin/python3.12 /usr/bot/currency_rate.py
+WorkingDirectory=/usr/bot
+User=www-data
+Group=www-data
+Restart=always
+RestartSec=5
+
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
