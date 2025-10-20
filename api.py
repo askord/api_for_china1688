@@ -44,62 +44,53 @@ def search_items():
             rate_response.raise_for_status()
             rate_data = rate_response.json()
             rate_cny = rate_data.get("CNY", 0)
-            rate_usd = rate_data.get("USD",0)
+            rate_usd = rate_data.get("USD", 0)
         except Exception as e:
             rate_cny, rate_usd = 0, 0
             print(f"[WARN] Can't get rates: {e}")
 
-        # Получаем параметры из запроса с пояснениями
+        # Получаем параметры из запроса
         params = {
-            "language": request.args.get('language', 'en'),          # Язык ответа (например, 'en' для английского, 'cn' для китайского)
-            "framePosition": request.args.get('framePosition', '0'), # Начальная позиция в списке результатов (для пагинации, по умолчанию 0)
-            "frameSize": request.args.get('frameSize', '50'),       # Количество возвращаемых элементов (максимум на странице, по умолчанию 50)
-            "CategoryId": request.args.get('CategoryId'),           # ID категории для фильтрации товаров (например, 'abb-201034004')
-            "ItemTitle": request.args.get('ItemTitle'),             # Поиск по названию товара (строка для фильтрации)
-            "OrderBy": request.args.get('OrderBy', 'Popularity:Desc'), # Сортировка (например, 'Popularity:Desc' - по убыванию популярности, 'Price:Asc' - по возрастанию цены)
-            "MinPrice": request.args.get('MinPrice'),               # Минимальная цена в юанях (CNY) для фильтрации
-            "MaxPrice": request.args.get('MaxPrice'),               # Максимальная цена в юанях (CNY) для фильтрации
-            "MinVolume": request.args.get('MinVolume'),             # Минимальный объем (количество доступных единиц) для фильтрации
-            "ImageUrl": request.args.get('ImageUrl')                # URL изображения для поиска похожих товаров (если поддерживается API)
+            "language": request.args.get('language', 'en'),
+            "framePosition": request.args.get('framePosition', '0'),
+            "frameSize": request.args.get('frameSize', '50'),
+            "CategoryId": request.args.get('CategoryId'),
+            "ItemTitle": request.args.get('ItemTitle'),
+            "OrderBy": request.args.get('OrderBy', 'Popularity:Desc'),
+            "MinPrice": request.args.get('MinPrice'),
+            "MaxPrice": request.args.get('MaxPrice'),
+            "MinVolume": request.args.get('MinVolume'),
+            "ImageUrl": request.args.get('ImageUrl')
         }
 
-        # Удаляем None значения из параметров, чтобы не отправлять пустые фильтры
         query_params = {k: v for k, v in params.items() if v is not None}
 
-
-
         # Выполняем запрос к внешнему API
-        response = requests.get(
-            EXTERNAL_API_URL,
-            headers=API_HEADERS,
-            params=query_params
-        )
-
-        # Проверяем успешность запроса
+        response = requests.get(EXTERNAL_API_URL, headers=API_HEADERS, params=query_params)
         response.raise_for_status()
         data = response.json()
-        
-        #Извлекаем список товаров
+
         items = data.get('Result', {}).get('Items', {}).get('Items', {}).get('Content', [])
         formatted_items = []
 
         for item in items:
-            physical = item.get("PhysicalParameters",{})
+            physical = item.get("PhysicalParameters", {}) or {}
+
+            # Габариты
             dimensions = {
-                "weight": physical.get("Weight"),
-                "length": physical.get("Length"),
-                "width": physical.get("Width"),
-                "height": physical.get("Height")
-            } if physical else None
+                "weight": str(physical.get("Weight", "-")),
+                "length": str(physical.get("Length", "-")),
+                "width": str(physical.get("Width", "-")),
+                "height": str(physical.get("Height", "-"))
+            }
 
-            quantity_prices= []
+            # Диапазоны цен
+            quantity_prices = []
             quantity_ranges = item.get('QuantityRanges', [])
-
             if isinstance(quantity_ranges, list):
                 for qr in quantity_ranges:
                     if not isinstance(qr, dict):
                         continue
-
                     min_q = qr.get('MinQuantity')
                     price_data = qr.get('Price', {})
                     if min_q is not None and isinstance(price_data, dict):
@@ -112,55 +103,61 @@ def search_items():
                             if rate_cny > 0 and rate_usd > 0:
                                 price_usd = round(original_price * rate_cny / rate_usd, 2)
                             quantity_prices.append({
-                                "min_quantity": min_q,
-                                "original_price_cny": original_price,
-                                "price_rub": price_rub,
-                                "price_usd": price_usd
+                                "min_quantity": str(min_q),
+                                "original_price_cny": str(original_price),
+                                "price_rub": str(price_rub) if price_rub is not None else "-",
+                                "price_usd": str(price_usd) if price_usd is not None else "-"
                             })
 
             min_order_quantity = (
-                min([qp["min_quantity"] for qp in quantity_prices])
+                min([float(qp["min_quantity"]) for qp in quantity_prices])
                 if quantity_prices else None
             )
-            price =  None
+
+            # Основная цена
             if quantity_prices:
-                min_q_entry = min(quantity_prices, key=lambda x: x["min_quantity"])
-                price_cny = min_q_entry.get("original_price")
+                min_q_entry = min(quantity_prices, key=lambda x: float(x["min_quantity"]))
+                price_cny = float(min_q_entry.get("original_price_cny", 0))
             else:
-                price_cny = item.get('Price', {}).get('OriginalPrice')
+                price_cny = item.get('Price', {}).get('OriginalPrice', 0)
+
             price_rub = round(price_cny * rate_cny, 2) if price_cny and rate_cny > 0 else None
             price_usd = round(price_cny * rate_cny / rate_usd, 2) if price_cny and rate_cny > 0 and rate_usd > 0 else None
 
+            image_url = (
+                item.get("MainPictureUrl")
+                or (item.get("Pictures", [{}])[0].get("Url") if item.get("Pictures") else None)
+                or "/assets/main/main-5.png"
+            )
+
             formatted_items.append({
-                "id": item.get("Id"),
-                "title": item.get("Title"),
-                "original_title": item.get("OriginalTitle"),
-                "url": item.get("ExternalItemUrl") or item.get("TaobaoItemUrl"),
-                "price_cny": price_cny,
-                "price_rub": price_rub,
-                "price_usd": price_usd,
-                "image": item.get("MainPictureUrl") or (item.get("Pictures",[{}])[0].get("Url") if item.get("Pictures") else None),
-                "min_order_quantity": min_order_quantity,
-                "vendor": item.get("VendorDisplayName"),
-                "location": item.get("Location",{}).get("City"),
+                "id": str(item.get("Id", "-")),
+                "title": str(item.get("Title", "-")),
+                "original_title": str(item.get("OriginalTitle", "-")),
+                "url": str(item.get("ExternalItemUrl") or item.get("TaobaoItemUrl") or "-"),
+                "price_cny": str(price_cny) if price_cny else "-",
+                "price_rub": str(price_rub) if price_rub else "-",
+                "price_usd": str(price_usd) if price_usd else "-",
+                "image": image_url,
+                "min_order_quantity": str(min_order_quantity) if min_order_quantity else "-",
+                "vendor": str(item.get("VendorDisplayName", "-")),
+                "location": str(item.get("Location", {}).get("City", "-")),
                 "dimensions": dimensions,
-                "quantity_prices" : quantity_prices
+                "quantity_prices": quantity_prices if quantity_prices else []
             })
-        # Возвращаем JSON ответ от RapidAPI
+
         return jsonify({
             "total": len(formatted_items),
             "items": formatted_items
         })
 
     except requests.exceptions.RequestException as e:
-        # Обработка ошибок внешнего API (например, проблемы с сетью или неверный ключ)
         return jsonify({
             'error': 'Failed to fetch data from external API',
             'message': str(e)
         }), 500
 
     except Exception as e:
-        # Обработка внутренних ошибок сервера
         return jsonify({
             'error': 'Internal server error',
             'message': str(e)
