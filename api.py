@@ -63,6 +63,21 @@ def search_items():
             "ImageUrl": request.args.get('ImageUrl')
         }
 
+        # Конвертируем MinPrice / MaxPrice из рублей в юани (если есть и курс доступен)
+        if rate_cny > 0:
+            if params.get("MinPrice"):
+                try:
+                    rub = float(params["MinPrice"])
+                    params["MinPrice"] = str(round(rub / rate_cny, 2))
+                except ValueError:
+                    params["MinPrice"] = None
+            if params.get("MaxPrice"):
+                try:
+                    rub = float(params["MaxPrice"])
+                    params["MaxPrice"] = str(round(rub / rate_cny, 2))
+                except ValueError:
+                    params["MaxPrice"] = None
+                    
         query_params = {k: v for k, v in params.items() if v is not None}
 
         # Выполняем запрос к внешнему API
