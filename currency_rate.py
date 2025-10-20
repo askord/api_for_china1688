@@ -18,20 +18,24 @@ def get_cbr_rate():
         response = requests.get(url)
         data = response.json()
         cny_rate = data['Valute']['CNY']['Value']
+        usd_rate = data['Valute']['USD']['Value']
         client = redis.Redis(host=REDIS_HOST,port=6379,password=REDIS_PASSWORD, db=0, decode_responses=True)
         client.set('cny_rate',cny_rate)
+        client.set('usd_rate', usd_rate)
         print(f"[ОК] Курс CNY обновлен: {cny_rate}")
+        print(f"[ОК] Курс USD обновлен: {usd_rate}")
         client.close()
-        return cny_rate
+        return cny_rate, usd_rate
     except Exception as e:
-        print(f"[Ошибка] Не удалось обновить курс: {e}")
+        print(f"[Ошибка] Не удалось обновить курсы: {e}")
 
 @app.route('/api/rate', methods=['GET'])
 def get_rate():
     client = redis.Redis(host=REDIS_HOST,port=6379,password=REDIS_PASSWORD, db=0, decode_responses=True)
     cny_rate = client.get('cny_rate')
-    if cny_rate:
-        return jsonify({'CNY':float(cny_rate)})
+    usd_rate = client.get('usd_rate')
+    if cny_rate and usd_rate:
+        return jsonify({'CNY':float(cny_rate),'USD':float(usd_rate)})
     else:
         return jsonify({'error': 'Курс ещё не установлен'}),404
 

@@ -33,9 +33,22 @@ API_HEADERS = {
     "x-rapidapi-host": "otapi-1688.p.rapidapi.com"
 }
 
+RATE_API_URL = "http://"+os.getenv("API_HOST")+"/api/rate"
+
 @app.route('/api/search', methods=['GET'])
 def search_items():
     try:
+        # Получаем актуальные курсы валют
+        try:
+            rate_response = requests.get(RATE_API_URL, timeout=5)
+            rate_response.raise_for_status()
+            rate_data = rate_response.json()
+            rate_cny = rate_data.get("CNY", 0)
+            rate_usd = rate_data.get("USD",0)
+        except Exception as e:
+            rate_cny, rate_usd = 0, 0
+            print(f"[WARN] Can't get rates: {e}")
+
         # Получаем параметры из запроса с пояснениями
         params = {
             "language": request.args.get('language', 'en'),          # Язык ответа (например, 'en' для английского, 'cn' для китайского)
@@ -52,6 +65,8 @@ def search_items():
 
         # Удаляем None значения из параметров, чтобы не отправлять пустые фильтры
         query_params = {k: v for k, v in params.items() if v is not None}
+
+
 
         # Выполняем запрос к внешнему API
         response = requests.get(
@@ -90,9 +105,17 @@ def search_items():
                     if min_q is not None and isinstance(price_data, dict):
                         original_price = price_data.get('OriginalPrice')
                         if original_price is not None:
+                            price_rub = None
+                            price_usd = None
+                            if rate_cny > 0:
+                                price_rub = round(original_price * rate_cny, 2)
+                            if rate_cny > 0 and rate_usd > 0:
+                                price_usd = round(original_price * rate_cny / rate_usd, 2)
                             quantity_prices.append({
                                 "min_quantity": min_q,
-                                "original_price": original_price
+                                "original_price_cny": original_price,
+                                "price_rub": price_rub,
+                                "price_usd": price_usd
                             })
 
             min_order_quantity = (
@@ -102,16 +125,20 @@ def search_items():
             price =  None
             if quantity_prices:
                 min_q_entry = min(quantity_prices, key=lambda x: x["min_quantity"])
-                price = min_q_entry.get("original_price")
+                price_cny = min_q_entry.get("original_price")
             else:
-                price = item.get('Price', {}).get('OriginalPrice')
+                price_cny = item.get('Price', {}).get('OriginalPrice')
+            price_rub = round(price_cny * rate_cny, 2) if price_cny and rate_cny > 0 else None
+            price_usd = round(price_cny * rate_cny / rate_usd, 2) if price_cny and rate_cny > 0 and rate_usd > 0 else None
 
             formatted_items.append({
                 "id": item.get("Id"),
                 "title": item.get("Title"),
                 "original_title": item.get("OriginalTitle"),
                 "url": item.get("ExternalItemUrl") or item.get("TaobaoItemUrl"),
-                "price": price,
+                "price_cny": price_cny,
+                "price_rub": price_rub,
+                "price_usd": price_usd,
                 "image": item.get("MainPictureUrl") or (item.get("Pictures",[{}])[0].get("Url") if item.get("Pictures") else None),
                 "min_order_quantity": min_order_quantity,
                 "vendor": item.get("VendorDisplayName"),
