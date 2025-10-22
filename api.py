@@ -49,7 +49,7 @@ def search_items():
             rate_cny, rate_usd = 0, 0
             print(f"[WARN] Can't get rates: {e}")
 
-        # Получаем параметры из запроса
+        # Параметры из запроса
         params = {
             "language": request.args.get('language', 'en'),
             "framePosition": request.args.get('framePosition', '0'),
@@ -63,7 +63,7 @@ def search_items():
             "ImageUrl": request.args.get('ImageUrl')
         }
 
-        # Конвертируем MinPrice / MaxPrice из рублей в юани (если есть и курс доступен)
+        # Конвертируем MinPrice / MaxPrice из рублей в юани
         if rate_cny > 0:
             if params.get("MinPrice"):
                 try:
@@ -77,16 +77,18 @@ def search_items():
                     params["MaxPrice"] = str(round(rub / rate_cny, 2))
                 except ValueError:
                     params["MaxPrice"] = None
-                    
+
         query_params = {k: v for k, v in params.items() if v is not None}
 
-        # Выполняем запрос к внешнему API
+        # Запрос к внешнему API
         response = requests.get(EXTERNAL_API_URL, headers=API_HEADERS, params=query_params)
         response.raise_for_status()
         data = response.json()
 
         items = data.get('Result', {}).get('Items', {}).get('Items', {}).get('Content', [])
         formatted_items = []
+
+        from urllib.parse import urlparse
 
         for item in items:
             physical = item.get("PhysicalParameters", {}) or {}
@@ -139,11 +141,17 @@ def search_items():
             price_rub = round(price_cny * rate_cny, 2) if price_cny and rate_cny > 0 else None
             price_usd = round(price_cny * rate_cny / rate_usd, 2) if price_cny and rate_cny > 0 and rate_usd > 0 else None
 
-            image_url = (
+            # === Подмена ссылки на "локальную" ===
+            raw_image_url = (
                 item.get("MainPictureUrl")
                 or (item.get("Pictures", [{}])[0].get("Url") if item.get("Pictures") else None)
-                or "/assets/main/main-5.png"
             )
+
+            if raw_image_url and "alicdn.com" in raw_image_url:
+                path = urlparse(raw_image_url).path
+                image_url = f"/images{path}"  # фронт не знает, что это прокси
+            else:
+                image_url = "/assets/main/main-5.png"
 
             formatted_items.append({
                 "id": str(item.get("Id", "-")),
@@ -177,6 +185,7 @@ def search_items():
             'error': 'Internal server error',
             'message': str(e)
         }), 500
+
 
 
 @app.route('/api/send-email', methods=['POST'])
