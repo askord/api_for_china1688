@@ -33,7 +33,7 @@ API_HEADERS = {
     "x-rapidapi-host": "otapi-1688.p.rapidapi.com"
 }
 
-RATE_API_URL = "http://"+os.getenv("API_HOST")+"/api/rate"
+RATE_API_URL = "https://"+os.getenv("SSL_DOMEN")+"/api/rate"
 
 @app.route('/api/search', methods=['GET'])
 def search_items():
@@ -45,6 +45,7 @@ def search_items():
             rate_data = rate_response.json()
             rate_cny = rate_data.get("CNY", 0)
             rate_usd = rate_data.get("USD", 0)
+            print(f"[DEBUG] Rates: CNY={rate_cny},USD={rate_usd}")
         except Exception as e:
             rate_cny, rate_usd = 0, 0
             print(f"[WARN] Can't get rates: {e}")
