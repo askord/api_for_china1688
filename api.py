@@ -10,7 +10,6 @@ import time
 import sqlite3
 from datetime import datetime
 
-#Создание бд и таблицы для логов, если их еще нет
 DB_PATH = "search_logs.db"
 
 def init_db():
@@ -28,19 +27,16 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-    
+
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
-# Конфигурация внешнего API
 EXTERNAL_API_URL = "https://otapi-1688.p.rapidapi.com/BatchSearchItemsFrame"
 
-# Получаем API-ключ из переменной окружения, с дефолтным значением
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "78c5ed6b0fmsh2cc04c24a1dae59p1c63ebjsn6d8c7c768794")
 
-# Конфигурация для email
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
 EMAIL_USER = os.getenv("EMAIL_USER")
@@ -54,12 +50,13 @@ API_HEADERS = {
     "x-rapidapi-host": "otapi-1688.p.rapidapi.com"
 }
 
-RATE_API_URL = "https://"+os.getenv("SSL_DOMEN")+"/api/rate"
+RATE_API_URL = "https://" + os.getenv("SSL_DOMEN") + "/api/rate"
+
 
 @app.route('/api/search', methods=['GET'])
 def search_items():
     try:
-        # Получаем актуальные курсы валют
+        # Получаем курсы валют
         try:
             rate_response = requests.get(RATE_API_URL, timeout=5)
             rate_response.raise_for_status()
@@ -71,7 +68,7 @@ def search_items():
             rate_cny, rate_usd = 0, 0
             print(f"[WARN] Can't get rates: {e}")
 
-        # Параметры из запроса
+        # Параметры
         params = {
             "language": request.args.get('language', 'en'),
             "framePosition": request.args.get('framePosition', '0'),
@@ -84,13 +81,14 @@ def search_items():
             "MinVolume": request.args.get('MinVolume'),
             "ImageUrl": request.args.get('ImageUrl')
         }
-        # Логирование запросов
+
+        # Логирование
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
             cur.execute("""
-            INSERT INTO search_logs (timestamp, query, min_price, max_price, language)
-            VALUES (?, ?, ?, ?, ?)
+                INSERT INTO search_logs (timestamp, query, min_price, max_price, language)
+                VALUES (?, ?, ?, ?, ?)
             """, (
                 datetime.utcnow().isoformat(),
                 params.get("ItemTitle"),
@@ -103,20 +101,15 @@ def search_items():
         except Exception as e:
             print(f"[WARN] Failed to log search query: {e}")
 
-        # Конвертируем MinPrice / MaxPrice из рублей в юани
+        # Конвертируем рубли → юани
         if rate_cny > 0:
-            if params.get("MinPrice"):
-                try:
-                    rub = float(params["MinPrice"])
-                    params["MinPrice"] = str(round(rub / rate_cny, 2))
-                except ValueError:
-                    params["MinPrice"] = None
-            if params.get("MaxPrice"):
-                try:
-                    rub = float(params["MaxPrice"])
-                    params["MaxPrice"] = str(round(rub / rate_cny, 2))
-                except ValueError:
-                    params["MaxPrice"] = None
+            for key in ["MinPrice", "MaxPrice"]:
+                if params.get(key):
+                    try:
+                        rub = float(params[key])
+                        params[key] = str(round(rub / rate_cny, 2))
+                    except ValueError:
+                        params[key] = None
 
         query_params = {k: v for k, v in params.items() if v is not None}
 
@@ -141,7 +134,7 @@ def search_items():
                 "height": str(physical.get("Height", "-"))
             }
 
-            # Диапазоны цен
+            # Диапазон цен
             quantity_prices = []
             quantity_ranges = item.get('QuantityRanges', [])
             if isinstance(quantity_ranges, list):
@@ -153,23 +146,16 @@ def search_items():
                     if min_q is not None and isinstance(price_data, dict):
                         original_price = price_data.get('OriginalPrice')
                         if original_price is not None:
-                            price_rub = None
-                            price_usd = None
-                            if rate_cny > 0:
-                                price_rub = round(original_price * rate_cny, 2)
-                            if rate_cny > 0 and rate_usd > 0:
-                                price_usd = round(original_price * rate_cny / rate_usd, 2)
+                            price_rub = round(original_price * rate_cny, 2) if rate_cny > 0 else None
+                            price_usd = round(original_price * rate_cny / rate_usd, 2) if rate_cny > 0 and rate_usd > 0 else None
                             quantity_prices.append({
                                 "min_quantity": str(min_q),
                                 "original_price_cny": str(original_price),
-                                "price_rub": str(price_rub) if price_rub is not None else "-",
-                                "price_usd": str(price_usd) if price_usd is not None else "-"
+                                "price_rub": str(price_rub) if price_rub else "-",
+                                "price_usd": str(price_usd) if price_usd else "-"
                             })
 
-            min_order_quantity = (
-                min([float(qp["min_quantity"]) for qp in quantity_prices])
-                if quantity_prices else None
-            )
+            min_order_quantity = min([float(qp["min_quantity"]) for qp in quantity_prices]) if quantity_prices else 1
 
             # Основная цена
             if quantity_prices:
@@ -181,17 +167,68 @@ def search_items():
             price_rub = round(price_cny * rate_cny, 2) if price_cny and rate_cny > 0 else None
             price_usd = round(price_cny * rate_cny / rate_usd, 2) if price_cny and rate_cny > 0 and rate_usd > 0 else None
 
-            # === Подмена ссылки на "локальную" ===
+            # === Локальная ссылка на изображение ===
             raw_image_url = (
                 item.get("MainPictureUrl")
                 or (item.get("Pictures", [{}])[0].get("Url") if item.get("Pictures") else None)
             )
-
             if raw_image_url and "alicdn.com" in raw_image_url:
                 path = urlparse(raw_image_url).path
-                image_url = f"/images{path}"  # фронт не знает, что это прокси
+                image_url = f"/images{path}"
             else:
                 image_url = "/assets/main/main-5.png"
+
+            # --- Расчёт примерной цены с доставкой ---
+            approx_price_rub = None
+            try:
+                weight = float(physical.get("Weight", 0) or 0)
+                length = float(physical.get("Length", 0) or 0)
+                width = float(physical.get("Width", 0) or 0)
+                height = float(physical.get("Height", 0) or 0)
+                volume = (length * width * height) / 1_000_000 if all([length, width, height]) else None
+                min_q = float(min_order_quantity or 1)
+                total_weight = weight * min_q
+
+                if total_weight <= 500:
+                    x = (price_cny * 1.13) * rate_cny
+                    y = (total_weight * 4) * rate_usd
+                    z1 = (x + y) * 1.1
+                    approx_price_rub = round(z1)
+                else:
+                    if volume and volume > 0:
+                        x1 = 33.2 / volume
+                        x2 = (1560 / x1) * rate_usd
+                        y = price_cny * rate_cny
+                        y2 = (((y + x2) * 1.1 * 1.2) + 20000) * 1.1
+                        approx_price_rub = round(y2)
+                    else:
+                        approx_price_rub = round(price_cny * rate_cny * 147.5)
+            except Exception as e:
+                print(f"[WARN] Approx calc failed: {e}")
+                approx_price_rub = round(price_cny * rate_cny * 98.5)
+
+            # Обновляем quantity_prices
+            for qp in quantity_prices:
+                try:
+                    min_q2 = float(qp["min_quantity"])
+                    q_weight = weight * min_q2
+                    if q_weight <= 500:
+                        x = (float(qp["original_price_cny"]) * 1.13) * rate_cny
+                        y = (q_weight * 4) * rate_usd
+                        z1 = (x + y) * 1.1
+                        qp["approx_price_rub"] = str(round(z1))
+                    else:
+                        if volume and volume > 0:
+                            x1 = 33.2 / volume
+                            x2 = (1560 / x1) * rate_usd
+                            y = float(qp["original_price_cny"]) * rate_cny
+                            y2 = (((y + x2) * 1.1 * 1.2) + 20000) * 1.1
+                            qp["approx_price_rub"] = str(round(y2))
+                        else:
+                            qp["approx_price_rub"] = str(round(float(qp["original_price_cny"]) * rate_cny * 147.5))
+                except Exception as e:
+                    qp["approx_price_rub"] = "-"
+                    print(f"[WARN] Approx calc for quantity_prices failed: {e}")
 
             formatted_items.append({
                 "id": str(item.get("Id", "-")),
@@ -201,30 +238,22 @@ def search_items():
                 "price_cny": str(price_cny) if price_cny else "-",
                 "price_rub": str(price_rub) if price_rub else "-",
                 "price_usd": str(price_usd) if price_usd else "-",
+                "approx_price_rub": str(approx_price_rub) if approx_price_rub else "-",
                 "image": image_url,
                 "min_order_quantity": str(min_order_quantity) if min_order_quantity else "-",
                 "vendor": str(item.get("VendorDisplayName", "-")),
                 "location": str(item.get("Location", {}).get("City", "-")),
                 "dimensions": dimensions,
-                "quantity_prices": quantity_prices if quantity_prices else []
+                "quantity_prices": quantity_prices
             })
 
-        return jsonify({
-            "total": len(formatted_items),
-            "items": formatted_items
-        })
+        return jsonify({"total": len(formatted_items), "items": formatted_items})
 
     except requests.exceptions.RequestException as e:
-        return jsonify({
-            'error': 'Failed to fetch data from external API',
-            'message': str(e)
-        }), 500
-
+        return jsonify({'error': 'Failed to fetch data from external API', 'message': str(e)}), 500
     except Exception as e:
-        return jsonify({
-            'error': 'Internal server error',
-            'message': str(e)
-        }), 500
+        return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+
 
 @app.route('/api/logs', methods=['GET'])
 def get_logs():
@@ -233,9 +262,8 @@ def get_logs():
     cur.execute("SELECT * FROM search_logs ORDER BY id DESC LIMIT 100")
     rows = cur.fetchall()
     conn.close()
-    
-    columns = ["id","timestamp","query","min_price","max_price","language"]
-    logs = [dict(zip(columns,row)) for row in rows]
+    columns = ["id", "timestamp", "query", "min_price", "max_price", "language"]
+    logs = [dict(zip(columns, row)) for row in rows]
     return jsonify({"logs": logs})
 
 
@@ -244,112 +272,69 @@ def send_email_notification():
     try:
         time.sleep(5)
         data = request.get_json()
-        
-        # Проверяем обязательные поля
-        required_fields = ['email','phone', 'fio', 'message']
-        missing_fields = [field for field in required_fields if field not in data or not data[field]]
-        
+        required_fields = ['email', 'phone', 'fio', 'message']
+        missing_fields = [f for f in required_fields if f not in data or not data[f]]
         if missing_fields:
-            return jsonify({
-                'error': 'Missing required fields',
-                'missing_fields': missing_fields
-            }), 400
-        
-        sender_email = data['email']  # email отправителя (для связи)
+            return jsonify({'error': 'Missing required fields', 'missing_fields': missing_fields}), 400
+
+        sender_email = data['email']
         fio = data['fio']
         phone = data['phone']
         message_text = data['message']
         subject = data.get('subject', f'Новое сообщение от {fio}')
-        
-        # Формируем содержимое письма (будет отправлено НАМ)
+
         email_content = f"""
         Новое сообщение с формы обратной связи!
-        
+
         От: {fio}
-        Email для связи: {sender_email}
-        Телефон для связи: {phone}
+        Email: {sender_email}
+        Телефон: {phone}
         Сообщение:
         {message_text}
-        
-        ---
-        Это автоматическое уведомление от системы.
         """
-        
-        # Отправляем email НАМ (на EMAIL_USER)
+
         send_email(EMAIL_USER, subject, email_content)
-        
-        # Отправляем уведомление в Telegram
+
         telegram_sent = False
         telegram_error = None
-        
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
             try:
-                send_telegram_message(f"📧 Новое сообщение с формы:\n\n👤 От: {fio}\n📧 Email: {sender_email}\n\n💬 Сообщение:\n{message_text}")
+                send_telegram_message(f"📧 Новое сообщение:\n👤 {fio}\n📧 {sender_email}\n💬 {message_text}")
                 telegram_sent = True
             except Exception as e:
                 telegram_error = str(e)
 
-        return jsonify({
-            'success': True,
-            'message': 'Email успешно отправлен',
-            'telegram_sent': telegram_sent,
-            'telegram_error': telegram_error,
-        #    'recipient': EMAIL_USER,  # показываем куда отправили
-            'sender': {
-                'fio': fio,
-                'email': sender_email,
-                'phone': phone
-            }
-        })
-        
+        return jsonify({'success': True, 'message': 'Email отправлен', 'telegram_sent': telegram_sent, 'telegram_error': telegram_error})
     except Exception as e:
-        return jsonify({
-            'error': 'Failed to send email',
-            'message': str(e)
-        }), 500
+        return jsonify({'error': 'Failed to send email', 'message': str(e)}), 500
+
 
 def send_email(to_email, subject, message):
-    """Отправка email через SMTP"""
     if not all([EMAIL_USER, EMAIL_PASSWORD]):
         raise Exception("Email credentials not configured")
-
     msg = MIMEMultipart()
     msg['From'] = f'{EMAIL_FROM_NAME} <{EMAIL_USER}>'
     msg['To'] = to_email
     msg['Subject'] = subject
-
     msg.attach(MIMEText(message, 'plain', 'utf-8'))
+    with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_USER, to_email, msg.as_string())
 
-    try:
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USER, to_email, msg.as_string())
-    except Exception as e:
-        raise Exception(f"SMTP error: {str(e)}")
 
 def send_telegram_message(message):
-    """Отправка сообщения в Telegram"""
     if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
         raise Exception("Telegram credentials not configured")
-    
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        'chat_id': TELEGRAM_CHAT_ID,
-        'text': message,
-        'parse_mode': 'HTML'
-    }
-    
+    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML'}
     response = requests.post(url, json=payload)
     response.raise_for_status()
-    
     return response.json()
 
+
 if __name__ == '__main__':
-    # Инициализация БД
     init_db()
-    # Получаем IP-адрес и порт из переменных окружения, с дефолтными значениями
-    host = os.getenv("API_HOST", "0.0.0.0")  # По умолчанию доступен на всех интерфейсах
-    port = int(os.getenv("API_PORT", "5000"))  # По умолчанию порт 5000
-    
+    host = os.getenv("API_HOST", "0.0.0.0")
+    port = int(os.getenv("API_PORT", "5000"))
     app.run(debug=True, host=host, port=port)
