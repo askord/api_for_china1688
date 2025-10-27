@@ -7,7 +7,30 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from flask_cors import CORS
 import time
+import sqlite3
+from datetime import datetime
 
+#Создание бд и таблицы для логов, если их еще нет
+DB_PATH = "search_logs.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS search_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            ip TEXT,
+            query TEXT,
+            category_id TEXT,
+            min_price REAL,
+            max_price REAL,
+            language TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+    
 load_dotenv()
 
 app = Flask(__name__)
@@ -63,6 +86,26 @@ def search_items():
             "MinVolume": request.args.get('MinVolume'),
             "ImageUrl": request.args.get('ImageUrl')
         }
+        # Логирование запросов
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("""
+            INSERT INTO search_logs (timestamp, ip, query, category_id, min_price, max_price, language)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.utcnow().isoformat(),
+                request.remote_addr,
+                params.get("ItemTitle"),
+                params.get("CategoryId"),
+                params.get("MinPrice"),
+                params.get("MaxPrice"),
+                params.get("language")
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[WARN] Failed to log search query: {e}")
 
         # Конвертируем MinPrice / MaxPrice из рублей в юани
         if rate_cny > 0:
@@ -296,6 +339,8 @@ def send_telegram_message(message):
     return response.json()
 
 if __name__ == '__main__':
+    # Инициализация БД
+    init_db()
     # Получаем IP-адрес и порт из переменных окружения, с дефолтными значениями
     host = os.getenv("API_HOST", "0.0.0.0")  # По умолчанию доступен на всех интерфейсах
     port = int(os.getenv("API_PORT", "5000"))  # По умолчанию порт 5000
