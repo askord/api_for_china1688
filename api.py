@@ -20,9 +20,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS search_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
-            ip TEXT,
             query TEXT,
-            category_id TEXT,
             min_price REAL,
             max_price REAL,
             language TEXT
@@ -91,13 +89,11 @@ def search_items():
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
             cur.execute("""
-            INSERT INTO search_logs (timestamp, ip, query, category_id, min_price, max_price, language)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO search_logs (timestamp, query, min_price, max_price, language)
+            VALUES (?, ?, ?, ?, ?)
             """, (
                 datetime.utcnow().isoformat(),
-                request.remote_addr,
                 params.get("ItemTitle"),
-                params.get("CategoryId"),
                 params.get("MinPrice"),
                 params.get("MaxPrice"),
                 params.get("language")
@@ -230,6 +226,17 @@ def search_items():
             'message': str(e)
         }), 500
 
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM search_logs ORDER BY id DESC LIMIT 100")
+    rows = cur.fetchall()
+    conn.close()
+    
+    columns = ["id","timestamp","query","min_price","max_price","language"]
+    logs = [dict(zip(columns,row)) for row in rows]
+    return jsonify({"logs": logs})
 
 
 @app.route('/api/send-email', methods=['POST'])
